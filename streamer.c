@@ -1,4 +1,4 @@
-#include <stdio.h>
+#include <memory.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/app/gstappsrc.h>
@@ -6,12 +6,10 @@
 #define STREAMER_EXPORTS
 #include "streamer.h"
 
-
 typedef struct {
 	GMainLoop *loop;
 	GstElement *pipeline, *source, *parse, *scale, *capsfilter, *conv, *mux, *sink;
 	guint sourceid;
-	FILE *file;
 	GstBus *bus;
 	GThread *m_loop_thread;
 	guint bus_watch_id;
@@ -46,7 +44,7 @@ gpointer    user_data)
 	}
 	else {
 		g_debug("Have data\n");
-	}
+	}	
 	buffer = gst_buffer_copy(app.buffer);
 	app.have_data = FALSE;
 	resize = app.resize;
@@ -57,19 +55,18 @@ gpointer    user_data)
 		return;
 
 	if (resize) {
-		g_print("Actually resizing... ");
+		g_warning("Streamer resizing to %dx%d\n", app.in_width, app.in_height);
 		g_object_set(G_OBJECT(app.source), "caps",
 			gst_caps_new_simple("video/x-raw",
 			"format", G_TYPE_STRING, "RGB",
 			"width", G_TYPE_INT, app.in_width,
 			"height", G_TYPE_INT, app.in_height,
 			"framerate", GST_TYPE_FRACTION, app.in_framerate, 1,
-			NULL), NULL);
-		g_print("Done resizing.\n");
+			NULL), NULL);		
 	}
 
 	if (app.stop) {
-		gst_app_src_end_of_stream((GstAppSrc*)user_data);
+		gst_app_src_end_of_stream((GstAppSrc*)appsrc);
 		return;
 	}
 
@@ -95,7 +92,7 @@ gpointer    data)
 	switch (GST_MESSAGE_TYPE(msg)) {
 
 	case GST_MESSAGE_EOS:
-		g_print("End of stream\n");
+		g_warning("End of stream\n");
 		g_main_loop_quit(loop);
 		break;
 
@@ -122,9 +119,9 @@ gpointer    data)
 static void
 main_loop_run(gpointer data)
 {
-	g_print("Thread started\n");
+	g_debug("Streamer thread started\n");
 	g_main_loop_run(app.loop);
-	g_print("Returned, stopping playback\n");
+	g_debug("Streamer returned, stopping playback\n");
 }
 
 gboolean streamer_init() {
@@ -140,7 +137,7 @@ gboolean streamer_init() {
 	return res;
 }
 
-void streamer_feed(guint w, guint h, guint8 fill) {
+void streamer_feed(guint w, guint h, guint8* frame) {
 	gssize size;
 
 	g_mutex_lock(&app.mutex);
@@ -160,8 +157,7 @@ void streamer_feed(guint w, guint h, guint8 fill) {
 		app.buffer = gst_buffer_new_and_alloc(size);
 	}
 
-	/* this makes the image black/white */
-	gst_buffer_memset(app.buffer, 0, fill, size);
+	gst_buffer_fill(app.buffer, 0, frame, size);
 	app.have_data = TRUE;
 
 	g_mutex_unlock(&app.mutex);
@@ -200,7 +196,7 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height) {
 	g_object_set(G_OBJECT(app.source),
 		"stream-type", 0,
 		"format", GST_FORMAT_TIME, NULL);
-	g_signal_connect(app.source, "need-data", G_CALLBACK(cb_need_data), app.source);
+	g_signal_connect(app.source, "need-data", G_CALLBACK(cb_need_data), NULL);
 	//g_signal_connect(source, "enough-data", G_CALLBACK(stop_feed), NULL);
 
 	g_object_set(G_OBJECT(app.source), "caps",
@@ -227,10 +223,10 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height) {
 
 	gst_element_set_state(app.pipeline, GST_STATE_PLAYING);
 
-	g_print("Running...\n");
+	g_debug("Running...\n");
 
 	if ((app.m_loop_thread = g_thread_new("mainloop", (GThreadFunc)main_loop_run, NULL)) == NULL){
-		g_print("ERROR: cannot start loop thread");
+		g_printerr("ERROR: cannot start loop thread");
 		return FALSE;
 	}
 
@@ -245,7 +241,7 @@ void streamer_stop() {
 
 	gst_element_set_state(app.pipeline, GST_STATE_NULL);
 
-	g_print("Deleting pipeline\n");
+	g_debug("Deleting pipeline\n");
 	gst_object_unref(GST_OBJECT(app.pipeline));
 	g_source_remove(app.bus_watch_id);
 	g_main_loop_unref(app.loop);
@@ -255,26 +251,43 @@ int
 main(int   argc,
 char *argv[])
 {
-	int i;
-	gulong t = gst_util_uint64_scale_int(GST_SECOND, 1, 30000);
-	g_print("usleep time: %ul\n", t);
-
+	int i, w=1024, h=600, fps = 30;
+	guint8* frame = g_malloc(w*h*4*3);	
+	
+	/* 1/30 of a second in microseconds */
+	gulong t = gst_util_uint64_scale_int(GST_SECOND, 1, fps*1000);	
+	
 	streamer_init();
-	streamer_run(30, 1024 / 2, 600 / 2);
-	for (i = 0; i < 30 * 5; i++) {
-		streamer_feed(1024, 600, 0x00 + i);
+	streamer_run(fps, w / 2, h/ 2);
+	for (i = 0; i < fps* 5; i++) {
+		memset(frame,  0x00+i, w*h*3);
+		streamer_feed(w, h, frame);
 		g_usleep(t);
 	}
+
 	g_print("Resizing input...\n");
-	for (i = 0; i < 30 * 5; i++) {
-		streamer_feed(1024 / 2, 600 / 2, 0xFF - i);
+	w/=2; h/=2;
+	for (i = 0; i < fps * 5; i++) {
+		memset(frame,  0xFF-i, w*h*3);
+		streamer_feed(w, h, frame);
 		g_usleep(t);
 	}
+
 	g_print("Resizing input...\n");
-	for (i = 0; i < 30 * 5; i++) {
-		streamer_feed(1024 / 4, 600 / 4, 0x00 + i);
+	w/=2; h/=2;
+	for (i = 0; i < fps * 5; i++) {
+		memset(frame,  0x00+i, w*h*3);
+		streamer_feed(w, h, frame);
 		g_usleep(t);
 	}
-	streamer_stop();
+
+	g_print("Resizing input...\n");
+	w*=6; h*=5;
+	for (i = 0; i < fps * 5; i++) {
+		memset(frame,  0x00+i, w*h*3);
+		streamer_feed(w, h, frame);
+		g_usleep(t);
+	}
+	streamer_stop();	
 	return 0;
 }
