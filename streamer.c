@@ -97,17 +97,17 @@ gpointer    data)
 		break;
 
 	case GST_MESSAGE_ERROR: {
-								gchar  *debug;
-								GError *error;
+		gchar  *debug;
+		GError *error;
 
-								gst_message_parse_error(msg, &error, &debug);
-								g_free(debug);
+		gst_message_parse_error(msg, &error, &debug);
+		g_free(debug);
 
-								g_printerr("Error: %s\n", error->message);
-								g_error_free(error);
+		g_printerr("Error: %s\n", error->message);
+		g_error_free(error);
 
-								g_main_loop_quit(loop);
-								break;
+		g_main_loop_quit(loop);
+		break;
 	}
 	default:
 		break;
@@ -164,7 +164,9 @@ void streamer_feed(guint w, guint h, guint8* frame) {
 	g_cond_signal(&app.cond);
 }
 
-gboolean streamer_run(guint in_framerate, guint out_width, guint out_height) {
+gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, const gchar* out_fname) {
+	gboolean tcp = !g_strcmp0(out_fname, "tcp");
+
 	g_cond_init(&app.cond);
 	app.loop = g_main_loop_new(NULL, FALSE);
 	app.in_width = 0;
@@ -177,16 +179,19 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height) {
 	app.source = gst_element_factory_make("appsrc", "mysrc");
 	app.scale = gst_element_factory_make("videoscale", "video-scale");
 	app.capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
-	app.conv = gst_element_factory_make("jpegenc", "jpeg-converter");
-	app.mux = gst_element_factory_make("avimux", "avi-muxer");
-	app.sink = gst_element_factory_make("filesink", "file-sink");
+	app.conv = gst_element_factory_make("jpegenc", "jpeg-converter");	
+	if(!tcp) {
+		app.mux = gst_element_factory_make("avimux", "avi-muxer");
+		g_assert(app.mux);		
+		app.sink = gst_element_factory_make("filesink", "file-sink");
+	} else
+		app.sink = gst_element_factory_make("tcpserversink", "file-sink");		
 
 	g_assert(app.pipeline);
 	g_assert(app.source);
 	g_assert(app.scale);
-	g_assert(app.capsfilter);
-	g_assert(app.conv);
-	g_assert(app.mux);
+	g_assert(app.capsfilter);	
+	g_assert(app.conv);	
 	g_assert(app.sink);
 
 	app.bus = gst_pipeline_get_bus(GST_PIPELINE(app.pipeline));
@@ -206,10 +211,14 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height) {
 		"height", G_TYPE_INT, out_height,
 		"framerate", GST_TYPE_FRACTION, in_framerate, 1,
 		NULL), NULL);
-	g_object_set(G_OBJECT(app.sink), "location", "out.avi", NULL);
-
-	gst_bin_add_many(GST_BIN(app.pipeline),
-		app.source, app.scale, app.capsfilter, app.conv, app.mux, app.sink, NULL);
+	if(!tcp) {
+		g_object_set(G_OBJECT(app.sink), "location", out_fname, NULL);
+		gst_bin_add_many(GST_BIN(app.pipeline),
+			app.source, app.scale, app.capsfilter, app.conv,  app.mux, app.sink, NULL);
+	} else {
+		gst_bin_add_many(GST_BIN(app.pipeline),
+			app.source, app.scale, app.capsfilter, app.conv,  app.sink, NULL);
+	}
 
 	g_object_set(G_OBJECT(app.capsfilter), "caps",
 		gst_caps_new_simple("video/x-raw",
@@ -218,8 +227,12 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height) {
 		"height", G_TYPE_INT, out_height,
 		"framerate", GST_TYPE_FRACTION, in_framerate, 1,
 		NULL), NULL);
-	gst_element_link_many(app.source, app.scale, app.capsfilter,
-		app.conv, app.mux, app.sink, NULL);
+	if(!tcp)
+		gst_element_link_many(app.source, app.scale, app.capsfilter,
+			app.conv,app.mux, app.sink, NULL);
+	else
+		gst_element_link_many(app.source, app.scale, app.capsfilter,
+			app.conv,app.sink, NULL);
 
 	gst_element_set_state(app.pipeline, GST_STATE_PLAYING);
 
@@ -258,8 +271,8 @@ char *argv[])
 	gulong t = gst_util_uint64_scale_int(GST_SECOND, 1, fps*1000);	
 	
 	streamer_init();
-	streamer_run(fps, w / 2, h/ 2);
-	for (i = 0; i < fps* 5; i++) {
+	streamer_run(fps, w / 2, h/ 2, "tcp");
+	for (i = 0; i < fps* 50; i++) {
 		memset(frame,  0x00+i, w*h*3);
 		streamer_feed(w, h, frame);
 		g_usleep(t);
@@ -267,7 +280,7 @@ char *argv[])
 
 	g_print("Resizing input...\n");
 	w/=2; h/=2;
-	for (i = 0; i < fps * 5; i++) {
+	for (i = 0; i < fps * 50; i++) {
 		memset(frame,  0xFF-i, w*h*3);
 		streamer_feed(w, h, frame);
 		g_usleep(t);
@@ -275,7 +288,7 @@ char *argv[])
 
 	g_print("Resizing input...\n");
 	w/=2; h/=2;
-	for (i = 0; i < fps * 5; i++) {
+	for (i = 0; i < fps * 50; i++) {
 		memset(frame,  0x00+i, w*h*3);
 		streamer_feed(w, h, frame);
 		g_usleep(t);
@@ -283,7 +296,7 @@ char *argv[])
 
 	g_print("Resizing input...\n");
 	w*=6; h*=5;
-	for (i = 0; i < fps * 5; i++) {
+	for (i = 0; i < fps * 50; i++) {
 		memset(frame,  0x00+i, w*h*3);
 		streamer_feed(w, h, frame);
 		g_usleep(t);
