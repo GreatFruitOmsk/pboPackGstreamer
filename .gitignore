@@ -2,3 +2,9 @@
 x64/
 *.suo
 *.sdf
+*.pdb
+*.tlog
+*.unsuccessfulbuild
+*.log
+*.lastbuildstate
+*.idb
