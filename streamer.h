@@ -37,7 +37,7 @@ streamer_run(guint in_framerate, guint out_width, guint out_height, const gchar*
 /*
   Initialize library. Call this before any other operations.
   Returns FALSE if an error occured, TRUE otherwise.
-*/
+*/ 
 gboolean STREAMER_EXPORT 
 streamer_init();
 
@@ -55,3 +55,6 @@ streamer_feed(guint w, guint h, guint8* frame);
 */
 void STREAMER_EXPORT 
 streamer_stop();
+
+void STREAMER_EXPORT
+streamer_set_rotation(gint r);

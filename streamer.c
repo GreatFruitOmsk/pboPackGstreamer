@@ -2,6 +2,7 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/app/gstappsrc.h>
+#include <gst/app/gstappsink.h>
 #include <glib.h>
 #define STREAMER_EXPORTS
 #include "streamer.h"
@@ -17,8 +18,9 @@ typedef struct {
 	gboolean stop;
 
 	gboolean resize, have_data;
-	guint in_framerate, in_width, in_height;
+	guint in_framerate, in_width, in_height, out_width, out_height;
 	GstBuffer* buffer;
+	gint rotation;
 
 	GMutex mutex;
 	GCond cond;
@@ -164,13 +166,23 @@ void streamer_feed(guint w, guint h, guint8* frame) {
 	g_cond_signal(&app.cond);
 }
 
+ GstFlowReturn on_new_sample(GstAppSink *appsink, gpointer user_data) {
+	 g_print("pn_new_smaple\n");
+	 return GST_FLOW_OK;
+ }
+
 gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, const gchar* out_fname) {
-	gboolean tcp = !g_strcmp0(out_fname, "tcp");
+	gboolean tcp = !g_strcmp0(out_fname, "tcp"),
+			toapp = !g_strcmp0(out_fname, "app");
+	static GstAppSinkCallbacks callbacks = {0};
+	callbacks.new_sample = on_new_sample;
 
 	g_cond_init(&app.cond);
 	app.loop = g_main_loop_new(NULL, FALSE);
 	app.in_width = 0;
 	app.in_height = 0;
+	app.out_width = out_width;
+	app.out_height = out_height;
 	app.in_framerate = in_framerate;
 	app.resize = FALSE;
 	app.have_data = FALSE;
@@ -180,12 +192,23 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, con
 	app.scale = gst_element_factory_make("videoscale", "video-scale");
 	app.capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
 	app.conv = gst_element_factory_make("jpegenc", "jpeg-converter");	
-	if(!tcp) {
+	if(toapp) {
+		app.sink = gst_element_factory_make("appsink", "app-sink");		
+		//gst_app_sink_set_callbacks(app.sink, &callbacks, NULL, NULL);
+		g_object_set (G_OBJECT (app.sink), "caps",
+  			gst_caps_new_simple ("video/x-raw",
+						 "format", G_TYPE_STRING, "RGB",
+						 "width", G_TYPE_INT, out_width,
+						 "height", G_TYPE_INT, out_height,
+						 "framerate", GST_TYPE_FRACTION, in_framerate, 1,
+						 NULL), NULL);
+	} else if(tcp) {
+		app.sink = gst_element_factory_make("tcpserversink", "file-sink");		
+	} else {
 		app.mux = gst_element_factory_make("avimux", "avi-muxer");
 		g_assert(app.mux);		
 		app.sink = gst_element_factory_make("filesink", "file-sink");
-	} else
-		app.sink = gst_element_factory_make("tcpserversink", "file-sink");		
+	}
 
 	g_assert(app.pipeline);
 	g_assert(app.source);
@@ -260,6 +283,32 @@ void streamer_stop() {
 	g_main_loop_unref(app.loop);
 }
 
+void streamer_set_rotation(gint r) {
+	if(app.rotation != r && app.capsfilter) {
+		app.rotation = r;
+		switch(r) {
+		case 1:
+			g_object_set(G_OBJECT(app.capsfilter), "caps",
+				gst_caps_new_simple("video/x-raw",
+				"format", G_TYPE_STRING, "RGB",
+				"width", G_TYPE_INT, app.out_height,
+				"height", G_TYPE_INT, app.out_width,
+				"framerate", GST_TYPE_FRACTION, app.in_framerate, 1,
+				NULL), NULL);
+			break;
+		default:
+			g_object_set(G_OBJECT(app.capsfilter), "caps",
+				gst_caps_new_simple("video/x-raw",
+				"format", G_TYPE_STRING, "RGB",
+				"width", G_TYPE_INT, app.out_width,
+				"height", G_TYPE_INT, app.out_height,
+				"framerate", GST_TYPE_FRACTION, app.in_framerate, 1,
+				NULL), NULL);
+			break;
+		}
+	}
+}
+
 int
 main(int   argc,
 char *argv[])
@@ -271,7 +320,7 @@ char *argv[])
 	gulong t = gst_util_uint64_scale_int(GST_SECOND, 1, fps*1000);	
 	
 	streamer_init();
-	streamer_run(fps, w / 2, h/ 2, "tcp");
+	streamer_run(fps, w / 2, h/ 2, "app");
 	for (i = 0; i < fps* 50; i++) {
 		memset(frame,  0x00+i, w*h*3);
 		streamer_feed(w, h, frame);
