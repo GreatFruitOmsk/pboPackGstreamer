@@ -47,6 +47,8 @@ gpointer    user_data)
 	if(app.input_callback) {
 		app.input_callback();
 		buffer = gst_buffer_copy(app.buffer);
+		resize = app.resize;
+		app.resize = FALSE;
 	} else {
 		g_mutex_lock(&app.mutex);
 		if (!app.have_data) {
@@ -92,7 +94,7 @@ gpointer    user_data)
 		g_main_loop_quit(app.loop);
 	}
 
-	g_print("written\n");
+	g_debug("written\n");
 }
 
 static gboolean
@@ -107,7 +109,7 @@ gpointer    data)
 	case GST_MESSAGE_STATE_CHANGED:
 		gst_message_parse_state_changed (msg, &old_state, &new_state, NULL);
 
-		if(msg->src == GST_OBJECT(app.pipeline) && new_state == GST_STATE_READY) {
+		if(msg->src == GST_OBJECT(app.pipeline) && new_state == GST_STATE_READY && old_state == GST_STATE_NULL) {
 			g_print ("Element %s changed state from %s to %s.\n",
 				GST_OBJECT_NAME (msg->src),
 				gst_element_state_get_name (old_state),
@@ -202,10 +204,10 @@ GstFlowReturn on_new_preroll(GstAppSink *appsink, gpointer user_data) {
 	GstMapInfo info;
 	GstClockTime clocktime;
 
-	g_print("on_new_preroll ");
+	g_debug("on_new_preroll ");
 	sample = gst_app_sink_pull_sample (appsink);
 	if (sample) {
-		g_print("pulled sample\n");
+		g_debug("pulled sample\n");
 		buffer = gst_sample_get_buffer(sample);
 		clocktime = GST_BUFFER_PTS(buffer);
 		memory = gst_buffer_get_memory(buffer, 0);
@@ -375,48 +377,48 @@ void streamer_set_rotation(gint r) {
 	}
 }
 
+void streamer_set_input_callback(StreamerCallback cb) {
+	app.input_callback = cb;
+}
+void streamer_set_output_callback(StreamerDataCallback cb) {
+	app.output_callback = cb;
+}
+void streamer_set_ready_callback(StreamerCallback cb) {
+	app.ready_callback = cb;
+}
+
+
+void on_streamer_input() {
+	static int i, w=1024, h=600;
+	static guint8* frame = NULL;
+	if(!frame)
+		frame = g_malloc(w*h*3);	
+	memset(frame,  0xAA, w*h*3);
+	streamer_feed_sync(w, h, frame);
+}
+void on_streamer_output(guint8* d, gssize s) {
+	static FILE* f;
+	if(!f) f = fopen("out.jpeg", "wb");
+	fwrite(d, 1, s, f);
+}
+void on_streamer_ready() {
+	g_print("READY!!!\n");
+}
+
 int
 main(int   argc,
 char *argv[])
 {
 	int i, w=1024, h=600, fps = 30;
-	guint8* frame = g_malloc(w*h*4*3);	
-	
-	/* 1/30 of a second in microseconds */
-	gulong t = gst_util_uint64_scale_int(GST_SECOND, 1, fps*1000);	
-	
+	//guint8* frame = g_malloc(w*h*4*3);	
+
+	streamer_set_input_callback(on_streamer_input);
+	streamer_set_output_callback(on_streamer_output);
+	streamer_set_ready_callback(on_streamer_ready);
 	streamer_init();
 	if(!streamer_run(fps, w / 2, h/ 2, "app"))
 		return 1;
-	for (i = 0; i < fps* 5; i++) {
-		memset(frame,  0x00+i, w*h*3);
-		streamer_feed(w, h, frame);
-		g_usleep(t);
-	}
-
-	g_print("Resizing input...\n");
-	w/=2; h/=2;
-	for (i = 0; i < fps * 5; i++) {
-		memset(frame,  0xFF-i, w*h*3);
-		streamer_feed(w, h, frame);
-		g_usleep(t);
-	}
-
-	g_print("Resizing input...\n");
-	w/=2; h/=2;
-	for (i = 0; i < fps * 5; i++) {
-		memset(frame,  0x00+i, w*h*3);
-		streamer_feed(w, h, frame);
-		g_usleep(t);
-	}
-
-	g_print("Resizing input...\n");
-	w*=6; h*=5;
-	for (i = 0; i < fps * 5; i++) {
-		memset(frame,  0x00+i, w*h*3);
-		streamer_feed(w, h, frame);
-		g_usleep(t);
-	}
-	streamer_stop();	
+	g_usleep(1000*1000*10);
+	streamer_stop();
 	return 0;
 }
