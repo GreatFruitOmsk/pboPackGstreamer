@@ -1,4 +1,5 @@
 #include <memory.h>
+#include <stdio.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/app/gstappsrc.h>
@@ -24,6 +25,11 @@ typedef struct {
 
 	GMutex mutex;
 	GCond cond;
+
+	FILE* outfile;
+
+	StreamerCallback ready_callback, input_callback;
+	StreamerDataCallback output_callback;
 }gst_app_t;
 static gst_app_t app;
 
@@ -38,26 +44,31 @@ gpointer    user_data)
 	GstFlowReturn ret;
 	gboolean resize;
 
-	g_mutex_lock(&app.mutex);
-	if (!app.have_data) {
-		g_debug("Wait for data... ");
-		g_cond_wait(&app.cond, &app.mutex);
-		g_debug("Done.\n");
+	if(app.input_callback) {
+		app.input_callback();
+		buffer = gst_buffer_copy(app.buffer);
+	} else {
+		g_mutex_lock(&app.mutex);
+		if (!app.have_data) {
+			g_debug("Wait for data... ");
+			g_cond_wait(&app.cond, &app.mutex);
+			g_debug("Done.\n");
+		}
+		else {
+			g_debug("Have data\n");
+		}	
+		buffer = gst_buffer_copy(app.buffer);
+		app.have_data = FALSE;
+		resize = app.resize;
+		app.resize = FALSE;
+		g_mutex_unlock(&app.mutex);
 	}
-	else {
-		g_debug("Have data\n");
-	}	
-	buffer = gst_buffer_copy(app.buffer);
-	app.have_data = FALSE;
-	resize = app.resize;
-	app.resize = FALSE;
-	g_mutex_unlock(&app.mutex);
 
 	if (!buffer)
 		return;
 
 	if (resize) {
-		g_warning("Streamer resizing to %dx%d\n", app.in_width, app.in_height);
+		g_warning("Streamer resizing to %dx%d", app.in_width, app.in_height);
 		g_object_set(G_OBJECT(app.source), "caps",
 			gst_caps_new_simple("video/x-raw",
 			"format", G_TYPE_STRING, "RGB",
@@ -81,7 +92,7 @@ gpointer    user_data)
 		g_main_loop_quit(app.loop);
 	}
 
-	g_debug("written\n");
+	g_print("written\n");
 }
 
 static gboolean
@@ -90,9 +101,22 @@ GstMessage *msg,
 gpointer    data)
 {
 	GMainLoop *loop = (GMainLoop *)data;
+	GstState old_state, new_state;
 
 	switch (GST_MESSAGE_TYPE(msg)) {
+	case GST_MESSAGE_STATE_CHANGED:
+		gst_message_parse_state_changed (msg, &old_state, &new_state, NULL);
 
+		if(msg->src == GST_OBJECT(app.pipeline) && new_state == GST_STATE_READY) {
+			g_print ("Element %s changed state from %s to %s.\n",
+				GST_OBJECT_NAME (msg->src),
+				gst_element_state_get_name (old_state),
+				gst_element_state_get_name (new_state));
+			if(app.ready_callback) {
+				app.ready_callback();
+			}
+		}
+		break;
 	case GST_MESSAGE_EOS:
 		g_warning("End of stream\n");
 		g_main_loop_quit(loop);
@@ -103,9 +127,10 @@ gpointer    data)
 		GError *error;
 
 		gst_message_parse_error(msg, &error, &debug);
-		g_free(debug);
+		// g_free(debug);
 
 		g_printerr("Error: %s\n", error->message);
+		g_printerr("Debug: %s\n", debug);
 		g_error_free(error);
 
 		g_main_loop_quit(loop);
@@ -122,6 +147,7 @@ static void
 main_loop_run(gpointer data)
 {
 	g_debug("Streamer thread started\n");
+
 	g_main_loop_run(app.loop);
 	g_debug("Streamer returned, stopping playback\n");
 }
@@ -132,18 +158,15 @@ gboolean streamer_init() {
 
 	res = gst_init_check(NULL, NULL, &e);
 	if (!res) {
-		g_printerr(e->message);
+		g_printerr("%s", e->message);
 	}
 
 	g_mutex_init(&app.mutex);
 	return res;
 }
 
-void streamer_feed(guint w, guint h, guint8* frame) {
+void streamer_feed_sync(guint w, guint h, guint8* frame) {
 	gssize size;
-
-	g_mutex_lock(&app.mutex);
-
 	if (w != app.in_width || h != app.in_height) {
 		app.resize = TRUE;
 		app.in_width = w;
@@ -160,22 +183,59 @@ void streamer_feed(guint w, guint h, guint8* frame) {
 	}
 
 	gst_buffer_fill(app.buffer, 0, frame, size);
+}
+
+void streamer_feed(guint w, guint h, guint8* frame) {
+	g_mutex_lock(&app.mutex);
+
+	streamer_feed_sync(w, h, frame);
 	app.have_data = TRUE;
 
 	g_mutex_unlock(&app.mutex);
 	g_cond_signal(&app.cond);
 }
 
- GstFlowReturn on_new_sample(GstAppSink *appsink, gpointer user_data) {
-	 g_print("pn_new_smaple\n");
-	 return GST_FLOW_OK;
+GstFlowReturn on_new_preroll(GstAppSink *appsink, gpointer user_data) {
+	GstSample* sample = NULL;
+	GstBuffer* buffer;
+	GstMemory* memory;
+	GstMapInfo info;
+	GstClockTime clocktime;
+
+	g_print("on_new_preroll ");
+	sample = gst_app_sink_pull_sample (appsink);
+	if (sample) {
+		g_print("pulled sample\n");
+		buffer = gst_sample_get_buffer(sample);
+		clocktime = GST_BUFFER_PTS(buffer);
+		memory = gst_buffer_get_memory(buffer, 0);
+		gst_memory_map(memory, &info, GST_MAP_READ);
+		/*
+			You can access raw memory at info.data
+		*/
+		if(app.output_callback)
+			app.output_callback(info.data, info.size);
+		//fwrite(info.data, 1, info.size, app.outfile);
+		
+		gst_memory_unmap(memory, &info);
+		gst_memory_unref(memory);
+		gst_sample_unref(sample);
+	}
+	return GST_FLOW_OK;
+}
+ void on_eos(GstAppSink *appsink, gpointer user_data) {
+ 	g_print("on_eos\n");
+ 	// return GST_FLOW_OK;
  }
+
 
 gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, const gchar* out_fname) {
 	gboolean tcp = !g_strcmp0(out_fname, "tcp"),
-			toapp = !g_strcmp0(out_fname, "app");
-	static GstAppSinkCallbacks callbacks = {0};
-	callbacks.new_sample = on_new_sample;
+			toapp = !g_strcmp0(out_fname, "app"),
+			res;
+	static GstAppSinkCallbacks callbacks = {on_eos, NULL, on_new_preroll};
+
+	app.outfile = fopen("out.jpeg", "wb");
 
 	g_cond_init(&app.cond);
 	app.loop = g_main_loop_new(NULL, FALSE);
@@ -187,23 +247,24 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, con
 	app.resize = FALSE;
 	app.have_data = FALSE;
 
-	app.pipeline = gst_pipeline_new("video-player");
-	app.source = gst_element_factory_make("appsrc", "mysrc");
+	app.pipeline = gst_pipeline_new("video-streamer");
+	app.source = gst_element_factory_make("appsrc", "app-src");
 	app.scale = gst_element_factory_make("videoscale", "video-scale");
 	app.capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
 	app.conv = gst_element_factory_make("jpegenc", "jpeg-converter");	
 	if(toapp) {
 		app.sink = gst_element_factory_make("appsink", "app-sink");		
-		//gst_app_sink_set_callbacks(app.sink, &callbacks, NULL, NULL);
-		g_object_set (G_OBJECT (app.sink), "caps",
-  			gst_caps_new_simple ("video/x-raw",
-						 "format", G_TYPE_STRING, "RGB",
-						 "width", G_TYPE_INT, out_width,
-						 "height", G_TYPE_INT, out_height,
-						 "framerate", GST_TYPE_FRACTION, in_framerate, 1,
-						 NULL), NULL);
+		gst_app_sink_set_callbacks(GST_APP_SINK(app.sink), &callbacks, NULL, NULL);
+		// gst_app_sink_set_drop(GST_APP_SINK(app.sink), TRUE);
+		// g_object_set (G_OBJECT (app.sink), "caps",
+  // 			gst_caps_new_simple ("video/x-raw",
+		// 				 "format", G_TYPE_STRING, "RGB",
+		// 				 "width", G_TYPE_INT, out_width,
+		// 				 "height", G_TYPE_INT, out_height,
+		// 				 "framerate", GST_TYPE_FRACTION, in_framerate, 1,
+		// 				 NULL), NULL);
 	} else if(tcp) {
-		app.sink = gst_element_factory_make("tcpserversink", "file-sink");		
+		app.sink = gst_element_factory_make("tcpserversink", "tcp-sink");		
 	} else {
 		app.mux = gst_element_factory_make("avimux", "avi-muxer");
 		g_assert(app.mux);		
@@ -234,13 +295,13 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, con
 		"height", G_TYPE_INT, out_height,
 		"framerate", GST_TYPE_FRACTION, in_framerate, 1,
 		NULL), NULL);
-	if(!tcp) {
+	if(tcp || toapp) {
+		gst_bin_add_many(GST_BIN(app.pipeline),
+			app.source, app.scale, app.capsfilter, app.conv, app.sink, NULL);
+	} else {
 		g_object_set(G_OBJECT(app.sink), "location", out_fname, NULL);
 		gst_bin_add_many(GST_BIN(app.pipeline),
 			app.source, app.scale, app.capsfilter, app.conv,  app.mux, app.sink, NULL);
-	} else {
-		gst_bin_add_many(GST_BIN(app.pipeline),
-			app.source, app.scale, app.capsfilter, app.conv,  app.sink, NULL);
 	}
 
 	g_object_set(G_OBJECT(app.capsfilter), "caps",
@@ -250,19 +311,24 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, con
 		"height", G_TYPE_INT, out_height,
 		"framerate", GST_TYPE_FRACTION, in_framerate, 1,
 		NULL), NULL);
-	if(!tcp)
-		gst_element_link_many(app.source, app.scale, app.capsfilter,
-			app.conv,app.mux, app.sink, NULL);
+	if(tcp || toapp)
+		res = gst_element_link_many(app.source, app.scale, app.capsfilter,
+			app.conv, app.sink, NULL);
 	else
-		gst_element_link_many(app.source, app.scale, app.capsfilter,
-			app.conv,app.sink, NULL);
+		res = gst_element_link_many(app.source, app.scale, app.capsfilter,
+			app.conv, app.mux, app.sink, NULL);
+		
+	if(!res) {
+		g_printerr("ERROR: linking failed\n");
+		return FALSE;
+	}
 
 	gst_element_set_state(app.pipeline, GST_STATE_PLAYING);
 
 	g_debug("Running...\n");
 
 	if ((app.m_loop_thread = g_thread_new("mainloop", (GThreadFunc)main_loop_run, NULL)) == NULL){
-		g_printerr("ERROR: cannot start loop thread");
+		g_printerr("ERROR: cannot start loop thread\n");
 		return FALSE;
 	}
 
@@ -320,8 +386,9 @@ char *argv[])
 	gulong t = gst_util_uint64_scale_int(GST_SECOND, 1, fps*1000);	
 	
 	streamer_init();
-	streamer_run(fps, w / 2, h/ 2, "app");
-	for (i = 0; i < fps* 50; i++) {
+	if(!streamer_run(fps, w / 2, h/ 2, "app"))
+		return 1;
+	for (i = 0; i < fps* 5; i++) {
 		memset(frame,  0x00+i, w*h*3);
 		streamer_feed(w, h, frame);
 		g_usleep(t);
@@ -329,7 +396,7 @@ char *argv[])
 
 	g_print("Resizing input...\n");
 	w/=2; h/=2;
-	for (i = 0; i < fps * 50; i++) {
+	for (i = 0; i < fps * 5; i++) {
 		memset(frame,  0xFF-i, w*h*3);
 		streamer_feed(w, h, frame);
 		g_usleep(t);
@@ -337,7 +404,7 @@ char *argv[])
 
 	g_print("Resizing input...\n");
 	w/=2; h/=2;
-	for (i = 0; i < fps * 50; i++) {
+	for (i = 0; i < fps * 5; i++) {
 		memset(frame,  0x00+i, w*h*3);
 		streamer_feed(w, h, frame);
 		g_usleep(t);
@@ -345,7 +412,7 @@ char *argv[])
 
 	g_print("Resizing input...\n");
 	w*=6; h*=5;
-	for (i = 0; i < fps * 50; i++) {
+	for (i = 0; i < fps * 5; i++) {
 		memset(frame,  0x00+i, w*h*3);
 		streamer_feed(w, h, frame);
 		g_usleep(t);

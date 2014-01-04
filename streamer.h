@@ -1,9 +1,11 @@
 #ifdef _MSC_VER
-#ifdef STREAMER_EXPORTS
-#define STREAMER_EXPORT __declspec(dllexport) extern
-#else
-#define STREAMER_EXPORT__declspec(dllimport) extern
-#endif
+	#ifdef STREAMER_EXPORTS
+	#define STREAMER_EXPORT __declspec(dllexport) extern
+	#else
+	#define STREAMER_EXPORT__declspec(dllimport) extern
+	#endif
+#else 
+	#define STREAMER_EXPORT
 #endif
 
 /*
@@ -58,3 +60,15 @@ streamer_stop();
 
 void STREAMER_EXPORT
 streamer_set_rotation(gint r);
+
+typedef void(*StreamerCallback)();
+typedef void(*StreamerDataCallback)(guint8* d, gssize s);
+
+void STREAMER_EXPORT
+streamer_set_ready_callback(StreamerCallback);
+
+void STREAMER_EXPORT
+streamer_set_input_callback(StreamerCallback);
+
+void STREAMER_EXPORT
+streamer_set_output_callback(StreamerDataCallback);
