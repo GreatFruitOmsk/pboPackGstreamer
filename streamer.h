@@ -4,7 +4,7 @@
 	#else
 	#define STREAMER_EXPORT__declspec(dllimport) extern
 	#endif
-#else 
+#else
 	#define STREAMER_EXPORT
 #endif
 
@@ -33,14 +33,14 @@
 	out_fname		Output filename. Pass "tcp" instead if streaming over TCP is needed.
   Returns FALSE if an error occured, TRUE otherwise.
 */
-gboolean STREAMER_EXPORT 
+gboolean STREAMER_EXPORT
 streamer_run(guint in_framerate, guint out_width, guint out_height, const gchar* out_fname);
 
 /*
   Initialize library. Call this before any other operations.
   Returns FALSE if an error occured, TRUE otherwise.
-*/ 
-gboolean STREAMER_EXPORT 
+*/
+gboolean STREAMER_EXPORT
 streamer_init();
 
 /*
@@ -55,7 +55,7 @@ streamer_feed(guint w, guint h, guint8* frame);
 /*
   Stop streaming and destroy the pipeline.
 */
-void STREAMER_EXPORT 
+void STREAMER_EXPORT
 streamer_stop();
 
 void STREAMER_EXPORT

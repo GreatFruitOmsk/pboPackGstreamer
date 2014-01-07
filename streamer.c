@@ -58,7 +58,7 @@ gpointer    user_data)
 		}
 		else {
 			g_debug("Have data\n");
-		}	
+		}
 		buffer = gst_buffer_copy(app.buffer);
 		app.have_data = FALSE;
 		resize = app.resize;
@@ -77,7 +77,7 @@ gpointer    user_data)
 			"width", G_TYPE_INT, app.in_width,
 			"height", G_TYPE_INT, app.in_height,
 			"framerate", GST_TYPE_FRACTION, app.in_framerate, 1,
-			NULL), NULL);		
+			NULL), NULL);
 	}
 
 	if (app.stop) {
@@ -218,17 +218,17 @@ GstFlowReturn on_new_preroll(GstAppSink *appsink, gpointer user_data) {
 		if(app.output_callback)
 			app.output_callback(info.data, info.size);
 		//fwrite(info.data, 1, info.size, app.outfile);
-		
+
 		gst_memory_unmap(memory, &info);
 		gst_memory_unref(memory);
 		gst_sample_unref(sample);
 	}
 	return GST_FLOW_OK;
 }
- void on_eos(GstAppSink *appsink, gpointer user_data) {
- 	g_print("on_eos\n");
- 	// return GST_FLOW_OK;
- }
+void on_eos(GstAppSink *appsink, gpointer user_data) {
+	g_print("on_eos\n");
+	// return GST_FLOW_OK;
+}
 
 
 gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, const gchar* out_fname) {
@@ -253,9 +253,9 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, con
 	app.source = gst_element_factory_make("appsrc", "app-src");
 	app.scale = gst_element_factory_make("videoscale", "video-scale");
 	app.capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
-	app.conv = gst_element_factory_make("jpegenc", "jpeg-converter");	
+	app.conv = gst_element_factory_make("jpegenc", "jpeg-converter");
 	if(toapp) {
-		app.sink = gst_element_factory_make("appsink", "app-sink");		
+		app.sink = gst_element_factory_make("appsink", "app-sink");
 		gst_app_sink_set_callbacks(GST_APP_SINK(app.sink), &callbacks, NULL, NULL);
 		// gst_app_sink_set_drop(GST_APP_SINK(app.sink), TRUE);
 		// g_object_set (G_OBJECT (app.sink), "caps",
@@ -266,18 +266,18 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, con
 		// 				 "framerate", GST_TYPE_FRACTION, in_framerate, 1,
 		// 				 NULL), NULL);
 	} else if(tcp) {
-		app.sink = gst_element_factory_make("tcpserversink", "tcp-sink");		
+		app.sink = gst_element_factory_make("tcpserversink", "tcp-sink");
 	} else {
 		app.mux = gst_element_factory_make("avimux", "avi-muxer");
-		g_assert(app.mux);		
+		g_assert(app.mux);
 		app.sink = gst_element_factory_make("filesink", "file-sink");
 	}
 
 	g_assert(app.pipeline);
 	g_assert(app.source);
 	g_assert(app.scale);
-	g_assert(app.capsfilter);	
-	g_assert(app.conv);	
+	g_assert(app.capsfilter);
+	g_assert(app.conv);
 	g_assert(app.sink);
 
 	app.bus = gst_pipeline_get_bus(GST_PIPELINE(app.pipeline));
@@ -319,7 +319,7 @@ gboolean streamer_run(guint in_framerate, guint out_width, guint out_height, con
 	else
 		res = gst_element_link_many(app.source, app.scale, app.capsfilter,
 			app.conv, app.mux, app.sink, NULL);
-		
+
 	if(!res) {
 		g_printerr("ERROR: linking failed\n");
 		return FALSE;
@@ -392,7 +392,7 @@ void on_streamer_input() {
 	static int i, w=1024, h=600;
 	static guint8* frame = NULL;
 	if(!frame)
-		frame = g_malloc(w*h*3);	
+		frame = g_malloc(w*h*3);
 	memset(frame,  0xAA, w*h*3);
 	streamer_feed_sync(w, h, frame);
 }
@@ -410,7 +410,7 @@ main(int   argc,
 char *argv[])
 {
 	int i, w=1024, h=600, fps = 30;
-	//guint8* frame = g_malloc(w*h*4*3);	
+	//guint8* frame = g_malloc(w*h*4*3);
 
 	streamer_set_input_callback(on_streamer_input);
 	streamer_set_output_callback(on_streamer_output);
