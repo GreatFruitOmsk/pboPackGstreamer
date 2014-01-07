@@ -32,8 +32,9 @@ typedef struct {
 	StreamerCallback ready_callback, input_callback, eos_callback;
 	StreamerDataCallback output_callback;
 
-	void* zmq_context;
-	void* zmq_stream_sock;
+	void *zmq_context;
+	void *zmq_stream_sock;
+	gint zmq_stream_sock_port;
 } gst_app_t;
 static gst_app_t app;
 
@@ -425,7 +426,13 @@ void on_streamer_ready() {
 	g_assert(app.zmq_stream_sock != NULL);
 	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_LINGER, 0, sizeof(int)) == 0);
 	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_CONFLATE, 1, sizeof(int)) == 0);
-	g_assert(zmq_bind(app.zmq_stream_sock, "tcp://*:30000") == 0);
+	g_assert(zmq_bind(app.zmq_stream_sock, "tcp://*:*") == 0);
+	char endpoint[1024];
+	int size = sizeof(endpoint) / sizeof(char);
+	g_assert(zmq_getsockopt(app,zmq_stream_sock, ZMQ_LAST_ENDPOINT, endpoint, &size) == 0);
+	char *port_str = g_strrstr_len(endpoint, ":", size);
+	app.zmq_stream_sock_port = gint(g_ascii_strtoll(port_str + 1, NULL, 10));
+	g_assert(app.zmq_stream_sock_port > 0 && app.zmq_stream_sock_port <= 65535);
 }
 
 void on_streamer_eos() {
