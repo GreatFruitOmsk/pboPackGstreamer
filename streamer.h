@@ -71,4 +71,7 @@ void STREAMER_EXPORT
 streamer_set_input_callback(StreamerCallback);
 
 void STREAMER_EXPORT
+streamer_set_eos_callback(StreamerCallback);
+
+void STREAMER_EXPORT
 streamer_set_output_callback(StreamerDataCallback);

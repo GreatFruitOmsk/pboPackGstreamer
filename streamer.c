@@ -5,6 +5,7 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <glib.h>
+#include <zmq.h>
 #define STREAMER_EXPORTS
 #include "streamer.h"
 
@@ -28,9 +29,12 @@ typedef struct {
 
 	FILE* outfile;
 
-	StreamerCallback ready_callback, input_callback;
+	StreamerCallback ready_callback, input_callback, eos_callback;
 	StreamerDataCallback output_callback;
-}gst_app_t;
+
+	void* zmq_context;
+	void* zmq_stream_sock;
+} gst_app_t;
 static gst_app_t app;
 
 static void
@@ -228,6 +232,9 @@ GstFlowReturn on_new_preroll(GstAppSink *appsink, gpointer user_data) {
 void on_eos(GstAppSink *appsink, gpointer user_data) {
 	g_print("on_eos\n");
 	// return GST_FLOW_OK;
+	if(app.eos_callback) {
+		app.eos_callback();
+	}
 }
 
 
@@ -377,14 +384,21 @@ void streamer_set_rotation(gint r) {
 	}
 }
 
+
 void streamer_set_input_callback(StreamerCallback cb) {
 	app.input_callback = cb;
 }
+
 void streamer_set_output_callback(StreamerDataCallback cb) {
 	app.output_callback = cb;
 }
+
 void streamer_set_ready_callback(StreamerCallback cb) {
 	app.ready_callback = cb;
+}
+
+void streamer_set_eos_callback(StreamerCallback cb) {
+	app.eos_callback = cb;
 }
 
 
@@ -396,13 +410,29 @@ void on_streamer_input() {
 	memset(frame,  0xAA, w*h*3);
 	streamer_feed_sync(w, h, frame);
 }
+
 void on_streamer_output(guint8* d, gssize s) {
-	static FILE* f;
-	if(!f) f = fopen("out.jpeg", "wb");
-	fwrite(d, 1, s, f);
+	int rc = zmq_send(app.zmq_stream_sock, d, s, ZMQ_DONTWAIT);
+
+	if (rc != 0)
+		g_warning("Screenshot cannot be sent over zmq network: %s (%d)", zmq_strerror(rc), rc);
 }
+
 void on_streamer_ready() {
-	g_print("READY!!!\n");
+	app.zmq_context = zmq_ctx_new();
+	g_assert(app.zmq_context != NULL);
+	app.zmq_stream_sock = zmq_socket(app.zmq_context, ZMQ_PUSH);
+	g_assert(app.zmq_stream_sock != NULL);
+	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_LINGER, 0, sizeof(int)) == 0);
+	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_CONFLATE, 1, sizeof(int)) == 0);
+	g_assert(zmq_bind(app.zmq_stream_sock, "tcp://*:30000") == 0);
+}
+
+void on_streamer_eos() {
+	g_assert(zmq_close(app.zmq_stream_sock) == 0);
+	app.zmq_stream_sock = NULL;
+	g_assert(zmq_ctx_destroy(app.zmq_context) == 0);
+	app.zmq_context = NULL;
 }
 
 int
@@ -415,6 +445,7 @@ char *argv[])
 	streamer_set_input_callback(on_streamer_input);
 	streamer_set_output_callback(on_streamer_output);
 	streamer_set_ready_callback(on_streamer_ready);
+	streamer_set_eos_callback(on_streamer_eos);
 	streamer_init();
 	if(!streamer_run(fps, w / 2, h/ 2, "app"))
 		return 1;
