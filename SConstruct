@@ -26,8 +26,14 @@ if compiler in['msvc', 'mingw']:
 		TARGET_ARCH = 'x86_64',
 		TARGET_OS = 'Win32',	
 	)
-else:
+elif compiler=='gcc':
 	env = Environment()
 	env.ParseConfig('pkg-config --libs --cflags gstreamer-1.0 gstreamer-app-1.0')
+elif compiler=='mac':
+	env = Environment()
+	env.Append(
+		LINKFLAGS=['-Wl,-framework,GStreamer'],
+		CPPPATH=['/Library/Frameworks/GStreamer.framework/Headers']
+	)
 env.Program(['streamer.c'])
-env.SharedLibrary(['streamer.c'])
+env.SharedLibrary('libStreamer', ['streamer.c'])
