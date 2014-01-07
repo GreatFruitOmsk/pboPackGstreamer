@@ -420,18 +420,23 @@ void on_streamer_output(guint8* d, gssize s) {
 }
 
 void on_streamer_ready() {
+	char endpoint[1024] = {0};
+	size_t size = sizeof(endpoint) / sizeof(char), opt;
+	char *port_str;
+
 	app.zmq_context = zmq_ctx_new();
 	g_assert(app.zmq_context != NULL);
 	app.zmq_stream_sock = zmq_socket(app.zmq_context, ZMQ_PUSH);
 	g_assert(app.zmq_stream_sock != NULL);
-	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_LINGER, 0, sizeof(int)) == 0);
-	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_CONFLATE, 1, sizeof(int)) == 0);
+	opt = 0;
+	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_LINGER, &opt, sizeof(int)) == 0);
+	opt = 1;
+	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_CONFLATE, &opt, sizeof(int)) == 0);
 	g_assert(zmq_bind(app.zmq_stream_sock, "tcp://*:*") == 0);
-	char endpoint[1024];
-	int size = sizeof(endpoint) / sizeof(char);
-	g_assert(zmq_getsockopt(app,zmq_stream_sock, ZMQ_LAST_ENDPOINT, endpoint, &size) == 0);
-	char *port_str = g_strrstr_len(endpoint, ":", size);
-	app.zmq_stream_sock_port = gint(g_ascii_strtoll(port_str + 1, NULL, 10));
+	
+	g_assert(zmq_getsockopt(app.zmq_stream_sock, ZMQ_LAST_ENDPOINT, endpoint, &size) == 0);
+	port_str = g_strrstr_len(endpoint, size, ":");
+	app.zmq_stream_sock_port = (gint)(g_ascii_strtoll(port_str + 1, NULL, 10));
 	g_assert(app.zmq_stream_sock_port > 0 && app.zmq_stream_sock_port <= 65535);
 }
 
