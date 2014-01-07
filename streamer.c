@@ -1,5 +1,6 @@
 #include <memory.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/app/gstappsrc.h>
@@ -8,6 +9,8 @@
 #include <zmq.h>
 #define STREAMER_EXPORTS
 #include "streamer.h"
+
+#define G_LOG_DOMAIN ((gchar *)"Streamer")
 
 typedef struct {
 	GMainLoop *loop;
@@ -413,31 +416,42 @@ void on_streamer_input() {
 }
 
 void on_streamer_output(guint8* d, gssize s) {
-	int rc = zmq_send(app.zmq_stream_sock, d, s, ZMQ_DONTWAIT);
-
-	if (rc != 0)
-		g_warning("Screenshot cannot be sent over zmq network: %s (%d)", zmq_strerror(rc), rc);
+	if (zmq_send(app.zmq_stream_sock, d, s, ZMQ_DONTWAIT) == -1)
+		g_warning("Cannot send screenshot (%d bytes): %s (%d)", s, zmq_strerror(errno), errno);
 }
 
 void on_streamer_ready() {
 	char endpoint[1024] = {0};
-	size_t size = sizeof(endpoint) / sizeof(char), opt;
-	char *port_str;
+	size_t size = sizeof(endpoint) / sizeof(char);
+	int opt = -1;
+	char *port_str = NULL;
+	int port = 0;
 
 	app.zmq_context = zmq_ctx_new();
 	g_assert(app.zmq_context != NULL);
 	app.zmq_stream_sock = zmq_socket(app.zmq_context, ZMQ_PUSH);
 	g_assert(app.zmq_stream_sock != NULL);
+
+	// There is no reason to wait for last screenshot to be sent
 	opt = 0;
 	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_LINGER, &opt, sizeof(int)) == 0);
+
+	// Clients are interested in the most recent screenshots
 	opt = 1;
 	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_CONFLATE, &opt, sizeof(int)) == 0);
+
+	// Be explicity and don't let first frame to sit in the queue.
+	opt = 1;
+	g_assert(zmq_setsockopt(app.zmq_stream_sock, ZMQ_IMMEDIATE, &opt, sizeof(int)) == 0);
+
+	// By binding to ephemeral port we minimize chance of a situation when no ports are available.
 	g_assert(zmq_bind(app.zmq_stream_sock, "tcp://*:*") == 0);
-	
 	g_assert(zmq_getsockopt(app.zmq_stream_sock, ZMQ_LAST_ENDPOINT, endpoint, &size) == 0);
 	port_str = g_strrstr_len(endpoint, size, ":");
-	app.zmq_stream_sock_port = (gint)(g_ascii_strtoll(port_str + 1, NULL, 10));
-	g_assert(app.zmq_stream_sock_port > 0 && app.zmq_stream_sock_port <= 65535);
+	port = (gint)(g_ascii_strtoll(port_str + 1, NULL, 10));
+	g_assert(port > 0 && port <= 65535);
+	g_atomic_int_set(&app.zmq_stream_sock_port, port);
+	g_message("Streaming data on port %d", app.zmq_stream_sock_port);
 }
 
 void on_streamer_eos() {
@@ -447,21 +461,29 @@ void on_streamer_eos() {
 	app.zmq_context = NULL;
 }
 
-int
-main(int   argc,
-char *argv[])
+int streamer_get_port()
+{
+	return g_atomic_int_get(&app.zmq_stream_sock_port);
+}
+
+
+int main(int argc, char *argv[])
 {
 	int i, w=1024, h=600, fps = 30;
-	//guint8* frame = g_malloc(w*h*4*3);
+
+	g_log_set_handler(G_LOG_DOMAIN, G_LOG_LEVEL_DEBUG, g_log_default_handler, NULL);
 
 	streamer_set_input_callback(on_streamer_input);
 	streamer_set_output_callback(on_streamer_output);
 	streamer_set_ready_callback(on_streamer_ready);
 	streamer_set_eos_callback(on_streamer_eos);
 	streamer_init();
+
 	if(!streamer_run(fps, w / 2, h/ 2, "app"))
-		return 1;
+		return EXIT_FAILURE;
+
 	g_usleep(1000*1000*10);
 	streamer_stop();
-	return 0;
+
+	return EXIT_SUCCESS;
 }
